@@ -13,7 +13,8 @@ if (!global.atob) {
 
 // ----- Tu código normal empieza aquí -----
 import * as React from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Linking, Platform, Alert, ActivityIndicator } from 'react-native';
+// NUEVO: Añadido Modal y Pressable
+import { StyleSheet, View, Text, TouchableOpacity, Linking, Platform, Alert, ActivityIndicator, Modal, Pressable } from 'react-native';
 import MapView, { Marker, Callout, Polyline, UrlTile } from 'react-native-maps';
 import * as Location from 'expo-location';
 
@@ -22,8 +23,7 @@ import { db } from './firebaseConfig';
 // Importar funciones de firestore para consultar
 import { collection, getDocs } from 'firebase/firestore'; 
 
-// NUEVO: Importar los íconos personalizados
-// Asegúrate de que la ruta coincida con tu estructura de carpetas
+// Importar los íconos personalizados
 const foodIcon = require('./assets/icons/food.png');
 const busIcon = require('./assets/icons/bus.png');
 const facultyIcon = require('./assets/icons/faculty.png');
@@ -45,13 +45,19 @@ export default function App() {
   const [userLocation, setUserLocation] = React.useState(null);
   const [isLoading, setIsLoading] = React.useState(true); 
 
+  // --- NUEVO: Estados para el Modal ---
+  const [modalVisible, setModalVisible] = React.useState(false);
+  // selectedSpot guardará el objeto del marcador presionado (ej. 's', 'p', o 'f')
+  const [selectedSpot, setSelectedSpot] = React.useState(null);
+  // selectedType nos ayudará a mostrar el formato correcto en el modal
+  const [selectedType, setSelectedType] = React.useState(null); // 'food', 'pickup', or 'faculty'
+
+
   React.useEffect(() => {
-    // Función para centrar el mapa al inicio
+    // ... (onReady y requestLocation no cambian) ...
     const onReady = () => {
       mapRef.current?.animateCamera({ center, zoom: 19.5, heading: 0, pitch: 0 }, { duration: 600 });
     };
-
-    // Función para pedir permisos de ubicación
     const requestLocation = async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
@@ -63,28 +69,22 @@ export default function App() {
       setUserLocation({ latitude, longitude });
     };
     
-    // Función para cargar TODAS las colecciones
+    // ... (fetchAllData no cambia) ...
     const fetchAllData = async () => {
       try {
         setIsLoading(true);
-        
-        // 1. Cargar Food Spots
         const foodQuery = await getDocs(collection(db, "foodSpots"));
         const foodData = foodQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setFoodSpots(foodData);
         
-        // 2. Cargar Pickup Points
         const pickupQuery = await getDocs(collection(db, "pickupPoints"));
         const pickupData = pickupQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setPickupPoints(pickupData);
 
-        // 3. Cargar Faculties
         const facultyQuery = await getDocs(collection(db, "faculties"));
         const facultyData = facultyQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setFaculties(facultyData);
-
         console.log("Datos cargados!");
-
       } catch (error) {
         console.error("Error al cargar datos desde Firestore: ", error);
         Alert.alert("Error", "No se pudieron cargar los puntos de interés.");
@@ -122,6 +122,19 @@ export default function App() {
     }
   };
 
+  // --- NUEVO: Funciones para el Modal ---
+  const openModal = (spot, type) => {
+    setSelectedSpot(spot);
+    setSelectedType(type);
+    setModalVisible(true);
+  };
+
+  const closeModal = () => {
+    setModalVisible(false);
+    setSelectedSpot(null);
+    setSelectedType(null);
+  };
+
 
   return (
     <View style={styles.container}>
@@ -151,20 +164,13 @@ export default function App() {
           s.coord && <Marker 
             key={s.id} 
             coordinate={{ latitude: s.coord.latitude, longitude: s.coord.longitude }} 
-            image={foodIcon} // MODIFICADO: Se usa el ícono
+            image={foodIcon} 
             title={s.name || ''} 
             description={s.desc || ''}
-            onCalloutPress={() => openExternalNav(s.coord.latitude, s.coord.longitude, s.name)}
+            // MODIFICADO: onPress en lugar de onCalloutPress
+            onPress={() => openModal(s, 'food')}
           >
-            {Platform.OS === 'ios' && (
-              <Callout>
-                <View style={{ maxWidth: 220 }}>
-                  {s.name && <Text style={{ fontWeight: '600' }}>{s.name}</Text>}
-                  {s.desc && <Text>{s.desc}</Text>}
-                  <Text style={{ marginTop: 6, textDecorationLine: 'underline', color: '#007AFF' }}>Ir con Maps</Text>
-                </View>
-              </Callout>
-            )}
+            {/* MODIFICADO: Se elimina el <Callout> */}
           </Marker>
         ))}
         
@@ -173,20 +179,13 @@ export default function App() {
           p.coord && <Marker 
             key={p.id} 
             coordinate={{ latitude: p.coord.latitude, longitude: p.coord.longitude }} 
-            image={busIcon} // MODIFICADO: Se usa el ícono
+            image={busIcon} 
             title={p.name || ''} 
             description={p.lines || ''}
-            onCalloutPress={() => openExternalNav(p.coord.latitude, p.coord.longitude, p.name)}
+            // MODIFICADO: onPress en lugar de onCalloutPress
+            onPress={() => openModal(p, 'pickup')}
           >
-            {Platform.OS === 'ios' && (
-              <Callout>
-                <View style={{ maxWidth: 220 }}>
-                  {p.name && <Text style={{ fontWeight: '600' }}>{p.name}</Text>}
-                  {p.lines && <Text>Lineas: {p.lines}</Text>}
-                  <Text style={{ marginTop: 6, textDecorationLine: 'underline', color: '#007AFF' }}>Navegar aquí</Text>
-                </View>
-              </Callout>
-            )}
+            {/* MODIFICADO: Se elimina el <Callout> */}
           </Marker>
         ))}
 
@@ -195,43 +194,77 @@ export default function App() {
           f.coord && <Marker 
             key={f.id} 
             coordinate={{ latitude: f.coord.latitude, longitude: f.coord.longitude }} 
-            image={facultyIcon} // MODIFICADO: Se usa el ícono
+            image={facultyIcon} 
             title={f.name || ''} 
             description={f.desc || ''}
-            onCalloutPress={() => openExternalNav(f.coord.latitude, f.coord.longitude, f.name)}
+            // MODIFICADO: onPress en lugar de onCalloutPress
+            onPress={() => openModal(f, 'faculty')}
           >
-            {Platform.OS === 'ios' && (
-              <Callout>
-                <View style={{ maxWidth: 220 }}>
-                  {f.name && <Text style={{ fontWeight: '600' }}>{f.name}</Text>}
-                  {f.desc && <Text>{f.desc}</Text>}
-                  <Text style={{ marginTop: 6, textDecorationLine: 'underline', color: '#007AFF' }}>Ir al edificio</Text>
-                </View>
-              </Callout>
-            )}
+            {/* MODIFICADO: Se elimina el <Callout> */}
           </Marker>
         ))}
 
       </MapView> 
 
-      {/* Indicador de Carga */}
+      {/* ... (Indicador de Carga, Controles y Botón de Usuario) ... */}
       {isLoading && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#0000ff" />
           <Text>Cargando puntos de interés...</Text>
         </View>
       )}
-
-      {/* Controles */}
       <View style={styles.filters}>
         <Chip label={showFood ? 'Comida: ON' : 'Comida: OFF'} onPress={() => setShowFood(v => !v)} />
         <Chip label={showPickup ? 'Paradas: ON' : 'Paradas: OFF'} onPress={() => setShowPickup(v => !v)} />
         <Chip label={showFaculties ? 'Facultades: ON' : 'Facultades: OFF'} onPress={() => setShowFaculties(v => !v)} />
       </View>
-      
       <TouchableOpacity style={styles.userLocationButton} onPress={centerOnUser}>
         <Text style={{ fontWeight: 'bold' }}>🎯</Text>
       </TouchableOpacity>
+
+
+      {/* --- NUEVO: Modal de Detalles --- */}
+      <Modal
+        transparent={true}
+        animationType="slide"
+        visible={modalVisible}
+        onRequestClose={closeModal}
+      >
+        {/* Pressable para el fondo oscuro que cierra el modal */}
+        <Pressable style={styles.modalBackground} onPress={closeModal}>
+          {/* Pressable para el contenido, para evitar que el clic se propague al fondo */}
+          <Pressable style={styles.modalContent} onPress={() => {}}>
+            {selectedSpot && (
+              <>
+                <Text style={styles.modalTitle}>{selectedSpot.name}</Text>
+                
+                {/* Lógica para mostrar 'desc' o 'lines' */}
+                {selectedType === 'pickup' ? (
+                  <Text style={styles.modalDesc}>Líneas: {selectedSpot.lines || 'No especificadas'}</Text>
+                ) : (
+                  <Text style={styles.modalDesc}>{selectedSpot.desc || 'No hay descripción disponible.'}</Text>
+                )}
+
+                <TouchableOpacity 
+                  style={styles.modalButton} 
+                  onPress={() => {
+                    openExternalNav(selectedSpot.coord.latitude, selectedSpot.coord.longitude, selectedSpot.name);
+                    closeModal(); // Opcional: cerrar el modal después de presionar
+                  }}
+                >
+                  <Text style={styles.modalButtonText}>Ir con Maps</Text>
+                </TouchableOpacity>
+
+                {/* Botón para cerrar (alternativo) */}
+                <TouchableOpacity style={styles.closeButton} onPress={closeModal}>
+                  <Text style={styles.closeButtonText}>Cerrar</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+      
     </View>
   );
 }
@@ -289,5 +322,53 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,
+  },
+
+  // --- NUEVO: Estilos del Modal ---
+  modalBackground: {
+    flex: 1,
+    justifyContent: 'flex-end', // Alinea el contenido al fondo
+    backgroundColor: 'rgba(0, 0, 0, 0.5)', // Fondo oscuro semitransparente
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    padding: 22,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 20,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  modalDesc: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 20,
+  },
+  modalButton: {
+    backgroundColor: '#007AFF', // Azul de Apple
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  closeButton: {
+    marginTop: 10,
+    padding: 10,
+    alignItems: 'center',
+  },
+  closeButtonText: {
+    color: '#007AFF',
+    fontSize: 16,
   }
 });
