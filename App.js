@@ -357,7 +357,7 @@ function App() {
       {/* Barra de Búsqueda */}
       <TextInput
         style={searchBarStyle}
-        placeholder="Buscar por nombre )"
+        placeholder="Buscar por nombre"
         value={searchText}
         onChangeText={setSearchText}
         placeholderTextColor="#666"
