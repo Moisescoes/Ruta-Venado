@@ -1,118 +1,202 @@
-// NUEVO: Polyfill para btoa y atob que necesita Firebase
+// Polyfill para btoa y atob, requerido por Firebase en React Native
 import { decode, encode } from 'base-64'
+if (!global.btoa) { global.btoa = encode; }
+if (!global.atob) { global.atob = decode; }
 
-if (!global.btoa) {
-    global.btoa = encode;
-}
-
-if (!global.atob) {
-    global.atob = decode;
-}
-// ----- Fin del Polyfill -----
-
-
-// ----- Tu código normal empieza aquí -----
+// Imports de React y Componentes Nativos
 import * as React from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Linking, Platform, Alert, ActivityIndicator, Modal, Pressable, ScrollView, TextInput } from 'react-native';
-import MapView, { Marker, Callout, Polyline, UrlTile } from 'react-native-maps';
-import * as Location from 'expo-location';
+import { 
+  StyleSheet, View, Text, TouchableOpacity, Linking, 
+  Platform, Alert, ActivityIndicator, Modal, 
+  Pressable, ScrollView, TextInput 
+} from 'react-native';
 
-// Importar la base de datos (db) de tu archivo de configuración
+// Imports de Safe Area (para adaptabilidad de pantalla)
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'; 
+
+// Imports de Mapa
+import MapView, { Marker, UrlTile } from 'react-native-maps';
+
+// Imports de Funcionalidad
+import * as Location from 'expo-location'; 
+
+// Imports de Firebase (Base de Datos)
 import { db } from './firebaseConfig'; 
-// Importar funciones de firestore para consultar
 import { collection, getDocs } from 'firebase/firestore'; 
 
-// Importar los íconos personalizados
+// Imports de Recursos (Iconos Personalizados)
 const foodIcon = require('./assets/icons/food.png');
 const busIcon = require('./assets/icons/bus.png');
 const facultyIcon = require('./assets/icons/faculty.png');
 
-export default function App() {
+
+/**
+ * Calcula la distancia en KM entre dos coordenadas (Fórmula Haversine).
+ * Se usa para estimar el tiempo de caminata.
+ */
+function getHaversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Radio de la Tierra en km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    0.5 - Math.cos(dLat)/2 + 
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * (1 - Math.cos(dLon)) / 2;
+
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+/**
+ * Estima el tiempo de caminata (aprox. 5 km/h) basado en la distancia.
+ */
+function calculateWalkingTime(distanceInKm) {
+  const walkingSpeedKmh = 5; // Velocidad promedio caminando (km/h)
+  const timeHours = distanceInKm / walkingSpeedKmh;
+  const timeMinutes = Math.round(timeHours * 60);
+
+  if (timeMinutes < 1) {
+    return "Menos de 1 min caminando";
+  }
+  return `Aprox. ${timeMinutes} min caminando`;
+}
+
+/**
+ * Componente principal de la aplicación del mapa.
+ * Contiene toda la lógica de estado, mapa y modales.
+ */
+function App() {
+  // Hook para los insets (notch/barra de gestos) y adaptabilidad
+  const insets = useSafeAreaInsets(); 
+
+  // Referencia al mapa para controlarlo (ej. centrar)
   const mapRef = React.useRef(null);
+  
+  // Coordenada central del mapa (FCAeI)
   const center = { latitude: 18.9816298, longitude: -99.2381597 };
 
-  // --- Estados para los datos ---
+  // --- Estados de Datos ---
+  // Almacenan los puntos de interés cargados desde Firestore
   const [foodSpots, setFoodSpots] = React.useState([]);
   const [faculties, setFaculties] = React.useState([]);
   const [pickupPoints, setPickupPoints] = React.useState([]);
   
-  // --- Estados para los filtros ---
+  // --- Estados de Filtros ---
+  // Controlan la visibilidad de las capas
   const [showFood, setShowFood] = React.useState(true);
   const [showPickup, setShowPickup] = React.useState(true);
   const [showFaculties, setShowFaculties] = React.useState(true);
   
+  // --- Estados de UI y Búsqueda ---
   const [userLocation, setUserLocation] = React.useState(null);
   const [isLoading, setIsLoading] = React.useState(true); 
-
-  // --- Estados para los Modales ---
-  const [detailModalVisible, setDetailModalVisible] = React.useState(false); // Renombrado para claridad
-  const [filterModalVisible, setFilterModalVisible] = React.useState(false); // NUEVO
-  const [selectedSpot, setSelectedSpot] = React.useState(null);
-  const [selectedType, setSelectedType] = React.useState(null); 
-
-  // --- Estado para la Búsqueda ---
   const [searchText, setSearchText] = React.useState('');
 
+  // --- Estados de Modales ---
+  const [detailModalVisible, setDetailModalVisible] = React.useState(false);
+  const [filterModalVisible, setFilterModalVisible] = React.useState(false);
+  const [selectedSpot, setSelectedSpot] = React.useState(null);
+  const [selectedType, setSelectedType] = React.useState(null); 
+  const [walkingInfo, setWalkingInfo] = React.useState(''); 
 
+  /**
+   * Hook de efecto principal: Se ejecuta una vez al montar la app.
+   * Inicia el centrado del mapa, la carga de datos y el observador de ubicación.
+   */
   React.useEffect(() => {
-    // ... (onReady, requestLocation, fetchAllData no cambian) ...
+    // Anima la cámara a la posición inicial
     const onReady = () => {
       mapRef.current?.animateCamera({ center, zoom: 19.5, heading: 0, pitch: 0 }, { duration: 600 });
     };
-    const requestLocation = async () => {
+
+    // Carga inicial de todas las colecciones desde Firestore
+    const fetchAllData = async () => {
+      try {
+        setIsLoading(true); // Mostrar indicador de carga
+        
+        // Cargar las 3 colecciones en paralelo
+        const [foodQuery, pickupQuery, facultyQuery] = await Promise.all([
+          getDocs(collection(db, "foodSpots")),
+          getDocs(collection(db, "pickupPoints")),
+          getDocs(collection(db, "faculties"))
+        ]);
+
+        const foodData = foodQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setFoodSpots(foodData);
+        
+        const pickupData = pickupQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setPickupPoints(pickupData);
+
+        const facultyData = facultyQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setFaculties(facultyData);
+
+        console.log("Datos cargados!");
+
+      } catch (error) {
+        console.error("Error al cargar datos desde Firestore: ", error);
+        Alert.alert("Error", "No se pudieron cargar los puntos de interés.");
+      } finally {
+        setIsLoading(false); // Ocultar indicador de carga
+      }
+    };
+    
+    // Observador de la ubicación del usuario en tiempo real
+    let locationSubscriber = null;
+    const startWatchingLocation = async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permiso denegado', 'No se puede mostrar la ubicación sin permisos.');
         return;
       }
-      let location = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude } = location.coords;
-      setUserLocation({ latitude, longitude });
-    };
-    const fetchAllData = async () => {
-      try {
-        setIsLoading(true);
-        const foodQuery = await getDocs(collection(db, "foodSpots"));
-        const foodData = foodQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setFoodSpots(foodData);
-        
-        const pickupQuery = await getDocs(collection(db, "pickupPoints"));
-        const pickupData = pickupQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setPickupPoints(pickupData);
 
-        const facultyQuery = await getDocs(collection(db, "faculties"));
-        const facultyData = facultyQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setFaculties(facultyData);
-        console.log("Datos cargados!");
-      } catch (error) {
-        console.error("Error al cargar datos desde Firestore: ", error);
-        Alert.alert("Error", "No se pudieron cargar los puntos de interés.");
-      } finally {
-        setIsLoading(false);
+      // Inicia el observador para actualizaciones en vivo
+      locationSubscriber = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.BestForNavigation,
+          timeInterval: 2000, // Actualiza cada 2 segundos
+          distanceInterval: 10, // O cada 10 metros
+        },
+        (location) => {
+          const { latitude, longitude } = location.coords;
+          setUserLocation({ latitude, longitude }); // Actualiza el estado en vivo
+        }
+      );
+    };
+
+    // Ejecutar funciones al montar
+    requestAnimationFrame(onReady);
+    fetchAllData(); 
+    startWatchingLocation();
+
+    // Limpieza al desmontar (ahorra batería)
+    return () => {
+      if (locationSubscriber) {
+        locationSubscriber.remove(); 
       }
     };
+  }, []); 
 
-    requestAnimationFrame(onReady);
-    requestLocation();
-    fetchAllData(); 
-  }, []);
-
-  // ... (openExternalNav y centerOnUser no cambian) ...
+  /**
+   * Abre la app de mapas nativa (Google/Apple) con el modo de viaje.
+   * @param mode 'd' (driving) o 'w' (walking)
+   */
   const openExternalNav = (lat, lng, label = 'Destino', mode = 'd') => { 
     const scheme = Platform.OS === 'ios' ? 'http://maps.apple.com/' : 'google.navigation:';
     const labelEncoded = encodeURIComponent(label);
     
     if (Platform.OS === 'ios') {
-      const appleMapsUrl = `${scheme}?ll=${lat},${lng}&q=${labelEncoded}&dirflg=${mode === 'w' ? 'w' : 'd'}`; 
+      const appleMapsUrl = `${scheme}?ll=${lat},${lng}&q=${labelEncoded}&dirflg=${mode}`; 
       Linking.openURL(appleMapsUrl);
     } else {
-      const googleNavUrl = `${scheme}q=${lat},${lng}&mode=${mode === 'w' ? 'w' : 'd'}`;
+      const googleNavUrl = `${scheme}q=${lat},${lng}&mode=${mode}`;
       Linking.openURL(googleNavUrl).catch(() => {
+        // Fallback si la navegación falla
         Linking.openURL(`geo:${lat},${lng}?q=${labelEncoded}`);
       });
     }
   };
 
+  /**
+   * Anima el mapa para centrarlo en la ubicación actual del usuario.
+   */
   const centerOnUser = () => {
     if (userLocation) {
       mapRef.current?.animateToRegion({
@@ -124,22 +208,51 @@ export default function App() {
     }
   };
 
-  // --- Funciones de Modales ---
+  // --- Funciones de Control de Modales ---
+
+  /**
+   * Abre el modal de detalles del marcador y calcula la distancia.
+   */
   const openDetailModal = (spot, type) => {
     setSelectedSpot(spot);
     setSelectedType(type);
+
+    // Calcular distancia y tiempo si tenemos la ubicación del usuario
+    if (userLocation && spot.coord) {
+      const distKm = getHaversineDistance(
+        userLocation.latitude, 
+        userLocation.longitude,
+        spot.coord.latitude,
+        spot.coord.longitude
+      );
+      
+      const timeMsg = calculateWalkingTime(distKm);
+      const distMsg = distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`;
+      
+      setWalkingInfo(`📍 ${timeMsg} (${distMsg})`); // Ej: "📍 Aprox. 5 min caminando (0.8 km)"
+    } else {
+      setWalkingInfo(''); // Limpiar si no hay info
+    }
+
     setDetailModalVisible(true);
   };
 
+  /**
+   * Cierra el modal de detalles y limpia los estados.
+   */
   const closeDetailModal = () => {
     setDetailModalVisible(false);
     setSelectedSpot(null);
     setSelectedType(null);
+    setWalkingInfo(''); // Limpiar al cerrar
   };
 
-  // --- Funciones para filtrar los marcadores ---
+  // --- Lógica de Búsqueda y Filtros ---
+  
+  // Normaliza el texto de búsqueda para ser insensible a mayúsculas
   const normalizedSearch = searchText.toLowerCase();
 
+  // Arrays filtrados basados en el estado 'searchText'
   const filteredFood = foodSpots.filter(s => 
     s.name && s.name.toLowerCase().includes(normalizedSearch)
   );
@@ -150,7 +263,30 @@ export default function App() {
     f.name && f.name.toLowerCase().includes(normalizedSearch)
   );
 
+  // --- Estilos Dinámicos (Safe Area) ---
+  // Se recalculan en cada render para adaptarse a los 'insets'
+  const searchBarStyle = [
+    styles.searchBar,
+    { top: insets.top + 10 } // 10px por debajo del notch
+  ];
+  
+  const userLocationButtonStyle = [
+    styles.userLocationButton,
+    { top: insets.top + 80 } // Debajo de la barra de búsqueda
+  ];
 
+  const filterButtonStyle = [
+    styles.filterButton,
+    { bottom: insets.bottom + 10 } // 10px por encima de la barra de gestos
+  ];
+
+  const modalContentStyle = [
+    styles.modalContent,
+    { paddingBottom: insets.bottom + 22 } // Padding extra para la barra de gestos
+  ];
+
+
+  // --- Renderizado del Componente ---
   return (
     <View style={styles.container}>
       <MapView
@@ -166,15 +302,19 @@ export default function App() {
         showsUserLocation={true}
         followsUserLocation={false}
       >
-        {/* ... (UrlTile y Marcador Central) ... */}
+        {/* Capa de Mapa Base (MapTiler) */}
         <UrlTile
           urlTemplate="https://api.maptiler.com/maps/streets/256/{z}/{x}/{y}.png?key=Uhmy6q3KUCQAb59oD9g7"
           maximumZ={20}
           zIndex={-1}
         />
+        
+        {/* Marcador Central (FCAeI) */}
         <Marker coordinate={center} title="Edificio Principal" description="FCAeI" />
         
-        {/* --- MODIFICADO: Capas usan los arrays filtrados --- */}
+        {/* --- Capas Dinámicas (desde Firebase) --- */}
+
+        {/* Capa de Comida */}
         {showFood && filteredFood.map(s => (
           s.coord && <Marker 
             key={s.id} 
@@ -186,6 +326,7 @@ export default function App() {
           />
         ))}
         
+        {/* Capa de Paradas */}
         {showPickup && filteredPickup.map(p => (
           p.coord && <Marker 
             key={p.id} 
@@ -197,6 +338,7 @@ export default function App() {
           />
         ))}
 
+        {/* Capa de Facultades */}
         {showFaculties && filteredFaculties.map(f => (
           f.coord && <Marker 
             key={f.id} 
@@ -210,52 +352,66 @@ export default function App() {
 
       </MapView> 
 
-      {/* --- Barra de Búsqueda --- */}
+      {/* --- Elementos de UI Flotantes --- */}
+
+      {/* Barra de Búsqueda */}
       <TextInput
-        style={styles.searchBar}
-        placeholder="Buscar por nombre"
+        style={searchBarStyle}
+        placeholder="Buscar por nombre )"
         value={searchText}
         onChangeText={setSearchText}
         placeholderTextColor="#666"
       />
 
-      {/* ... (Indicador de Carga y Botón de Usuario) ... */}
+      {/* Indicador de Carga */}
       {isLoading && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#0000ff" />
           <Text>Cargando puntos de interés...</Text>
         </View>
       )}
-      <TouchableOpacity style={styles.userLocationButton} onPress={centerOnUser}>
+      
+      {/* Botón de Ubicación */}
+      <TouchableOpacity style={userLocationButtonStyle} onPress={centerOnUser}>
         <Text style={{ fontWeight: 'bold' }}>🎯</Text>
       </TouchableOpacity>
 
-      {/* --- NUEVO: Botón de Filtros --- */}
+      {/* Botón de Filtros */}
       <TouchableOpacity 
-        style={styles.filterButton} 
+        style={filterButtonStyle} 
         onPress={() => setFilterModalVisible(true)}
       >
         <Text style={styles.filterButtonText}>Filtros ▾</Text>
       </TouchableOpacity>
       
-      {/* --- Modal de Detalles --- */}
+      {/* --- Modales --- */}
+
+      {/* Modal: Detalles del Marcador */}
       <Modal
         transparent={true}
         animationType="slide"
-        visible={detailModalVisible} // Modificado
-        onRequestClose={closeDetailModal} // Modificado
+        visible={detailModalVisible}
+        onRequestClose={closeDetailModal}
       >
         <Pressable style={styles.modalBackground} onPress={closeDetailModal}>
-          <Pressable style={styles.modalContent} onPress={() => {}}>
+          <Pressable style={modalContentStyle} onPress={() => {}}>
             {selectedSpot && (
               <>
                 <Text style={styles.modalTitle}>{selectedSpot.name}</Text>
+                
+                {/* Muestra descripción o líneas de autobús */}
                 {selectedType === 'pickup' ? (
                   <Text style={styles.modalDesc}>Líneas: {selectedSpot.lines || 'No especificadas'}</Text>
                 ) : (
                   <Text style={styles.modalDesc}>{selectedSpot.desc || 'No hay descripción disponible.'}</Text>
                 )}
 
+                {/* Info de Distancia y Tiempo de Caminata */}
+                {walkingInfo && (
+                  <Text style={styles.modalDistance}>{walkingInfo}</Text>
+                )}
+
+                {/* Botones de Navegación (Caminar / Carro) */}
                 <View style={styles.modalButtonContainer}>
                   <TouchableOpacity 
                     style={[styles.modalButtonSmall, {backgroundColor: '#007AFF'}]} 
@@ -278,6 +434,7 @@ export default function App() {
                   </TouchableOpacity>
                 </View>
 
+                {/* Botón de Cerrar Modal */}
                 <TouchableOpacity style={styles.closeButton} onPress={closeDetailModal}>
                   <Text style={styles.closeButtonText}>Cerrar</Text>
                 </TouchableOpacity>
@@ -287,7 +444,7 @@ export default function App() {
         </Pressable>
       </Modal>
 
-      {/* --- NUEVO: Modal de Filtros --- */}
+      {/* Modal: Filtros de Capas */}
       <Modal
         transparent={true}
         animationType="slide"
@@ -295,9 +452,10 @@ export default function App() {
         onRequestClose={() => setFilterModalVisible(false)}
       >
         <Pressable style={styles.modalBackground} onPress={() => setFilterModalVisible(false)}>
-          <Pressable style={styles.modalContent} onPress={() => {}}>
+          <Pressable style={modalContentStyle} onPress={() => {}}>
             <Text style={styles.modalTitle}>Mostrar en el mapa</Text>
             
+            {/* Contenedor de los botones de filtro */}
             <View style={styles.filterChipContainer}>
               <Chip 
                 label={showFood ? '✅ Comida' : '⬜️ Comida'} 
@@ -327,7 +485,23 @@ export default function App() {
   );
 }
 
-// --- MODIFICADO: El Chip ahora acepta 'isActive' ---
+/**
+ * Wrapper principal que provee el contexto de Safe Area a la App.
+ * Este es el componente que se exporta por defecto.
+ */
+export default function AppWrapper() {
+  return (
+    <SafeAreaProvider>
+      <App />
+    </SafeAreaProvider>
+  );
+}
+
+
+/**
+ * Componente reutilizable para los botones de filtro (Chips).
+ * Cambia de estilo si está activo o inactivo.
+ */
 const Chip = ({ label, onPress, isActive }) => (
   <TouchableOpacity 
     onPress={onPress} 
@@ -342,13 +516,20 @@ const Chip = ({ label, onPress, isActive }) => (
   </TouchableOpacity>
 );
 
+// --- Hoja de Estilos ---
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  map: { width: '100%', height: '100%' },
+  container: { 
+    flex: 1, 
+    backgroundColor: '#fff' 
+  },
+  map: { 
+    width: '100%', 
+    height: '100%' 
+  },
   
+  // Estilo para la barra de búsqueda superior
   searchBar: {
     position: 'absolute',
-    top: 60, 
     left: 20,
     right: 20,
     backgroundColor: 'white',
@@ -365,10 +546,9 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
 
-  // --- MODIFICADO: Estilos de Filtros ---
+  // Estilo para el botón flotante de Filtros
   filterButton: {
     position: 'absolute',
-    bottom: 40,
     alignSelf: 'center',
     backgroundColor: 'white',
     paddingVertical: 12,
@@ -384,7 +564,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  // Contenedor para los chips DENTRO del modal de filtros
+  
+  // Estilos para los Chips dentro del modal de filtros
   filterChipContainer: {
     marginVertical: 20,
     gap: 10,
@@ -415,9 +596,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   
+  // Estilo para el botón flotante de Ubicación
   userLocationButton: {
     position: 'absolute',
-    top: 130, 
     right: 20,
     backgroundColor: 'white',
     padding: 12,
@@ -428,6 +609,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 3,
   },
+  
+  // Estilo para el overlay de "Cargando..."
   loadingOverlay: {
     position: 'absolute',
     top: 0,
@@ -437,19 +620,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.7)',
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
+    zIndex: 10, // Asegura que esté sobre el mapa
   },
 
-  // --- Estilos del Modal ---
+  // --- Estilos para los Modales ---
   modalBackground: {
     flex: 1,
-    justifyContent: 'flex-end', 
-    backgroundColor: 'rgba(0, 0, 0, 0.5)', 
+    justifyContent: 'flex-end', // Ancla el modal abajo
+    backgroundColor: 'rgba(0, 0, 0, 0.5)', // Fondo oscuro semitransparente
   },
   modalContent: {
     backgroundColor: 'white',
     padding: 22,
-    paddingBottom: 30,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     shadowColor: '#000',
@@ -466,15 +648,23 @@ const styles = StyleSheet.create({
   modalDesc: {
     fontSize: 16,
     color: '#333',
+    marginBottom: 4,
+  },
+  // Estilo para el texto de distancia/tiempo
+  modalDistance: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
     marginBottom: 20,
   },
+  // Contenedor para los 2 botones (Caminar/Carro)
   modalButtonContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 10,
   },
   modalButtonSmall: {
-    flex: 1,
+    flex: 1, // Hace que ambos botones ocupen el mismo espacio
     padding: 15,
     borderRadius: 10,
     alignItems: 'center',
