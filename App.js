@@ -13,8 +13,7 @@ if (!global.atob) {
 
 // ----- Tu código normal empieza aquí -----
 import * as React from 'react';
-// NUEVO: Añadido Modal y Pressable
-import { StyleSheet, View, Text, TouchableOpacity, Linking, Platform, Alert, ActivityIndicator, Modal, Pressable } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Linking, Platform, Alert, ActivityIndicator, Modal, Pressable, ScrollView, TextInput } from 'react-native';
 import MapView, { Marker, Callout, Polyline, UrlTile } from 'react-native-maps';
 import * as Location from 'expo-location';
 
@@ -45,16 +44,18 @@ export default function App() {
   const [userLocation, setUserLocation] = React.useState(null);
   const [isLoading, setIsLoading] = React.useState(true); 
 
-  // --- NUEVO: Estados para el Modal ---
-  const [modalVisible, setModalVisible] = React.useState(false);
-  // selectedSpot guardará el objeto del marcador presionado (ej. 's', 'p', o 'f')
+  // --- Estados para los Modales ---
+  const [detailModalVisible, setDetailModalVisible] = React.useState(false); // Renombrado para claridad
+  const [filterModalVisible, setFilterModalVisible] = React.useState(false); // NUEVO
   const [selectedSpot, setSelectedSpot] = React.useState(null);
-  // selectedType nos ayudará a mostrar el formato correcto en el modal
-  const [selectedType, setSelectedType] = React.useState(null); // 'food', 'pickup', or 'faculty'
+  const [selectedType, setSelectedType] = React.useState(null); 
+
+  // --- Estado para la Búsqueda ---
+  const [searchText, setSearchText] = React.useState('');
 
 
   React.useEffect(() => {
-    // ... (onReady y requestLocation no cambian) ...
+    // ... (onReady, requestLocation, fetchAllData no cambian) ...
     const onReady = () => {
       mapRef.current?.animateCamera({ center, zoom: 19.5, heading: 0, pitch: 0 }, { duration: 600 });
     };
@@ -68,8 +69,6 @@ export default function App() {
       const { latitude, longitude } = location.coords;
       setUserLocation({ latitude, longitude });
     };
-    
-    // ... (fetchAllData no cambia) ...
     const fetchAllData = async () => {
       try {
         setIsLoading(true);
@@ -99,14 +98,17 @@ export default function App() {
   }, []);
 
   // ... (openExternalNav y centerOnUser no cambian) ...
-  const openExternalNav = (lat, lng, label = 'Destino') => {
-    const scheme = Platform.select({ ios: 'http://maps.apple.com/', android: 'geo:' });
+  const openExternalNav = (lat, lng, label = 'Destino', mode = 'd') => { 
+    const scheme = Platform.OS === 'ios' ? 'http://maps.apple.com/' : 'google.navigation:';
+    const labelEncoded = encodeURIComponent(label);
+    
     if (Platform.OS === 'ios') {
-      Linking.openURL(`${scheme}?ll=${lat},${lng}&q=${encodeURIComponent(label)}`);
+      const appleMapsUrl = `${scheme}?ll=${lat},${lng}&q=${labelEncoded}&dirflg=${mode === 'w' ? 'w' : 'd'}`; 
+      Linking.openURL(appleMapsUrl);
     } else {
-      const url = `google.navigation:q=${lat},${lng}`;
-      Linking.openURL(url).catch(() => {
-        Linking.openURL(`${scheme}${lat},${lng}?q=${encodeURIComponent(label)}`);
+      const googleNavUrl = `${scheme}q=${lat},${lng}&mode=${mode === 'w' ? 'w' : 'd'}`;
+      Linking.openURL(googleNavUrl).catch(() => {
+        Linking.openURL(`geo:${lat},${lng}?q=${labelEncoded}`);
       });
     }
   };
@@ -122,18 +124,31 @@ export default function App() {
     }
   };
 
-  // --- NUEVO: Funciones para el Modal ---
-  const openModal = (spot, type) => {
+  // --- Funciones de Modales ---
+  const openDetailModal = (spot, type) => {
     setSelectedSpot(spot);
     setSelectedType(type);
-    setModalVisible(true);
+    setDetailModalVisible(true);
   };
 
-  const closeModal = () => {
-    setModalVisible(false);
+  const closeDetailModal = () => {
+    setDetailModalVisible(false);
     setSelectedSpot(null);
     setSelectedType(null);
   };
+
+  // --- Funciones para filtrar los marcadores ---
+  const normalizedSearch = searchText.toLowerCase();
+
+  const filteredFood = foodSpots.filter(s => 
+    s.name && s.name.toLowerCase().includes(normalizedSearch)
+  );
+  const filteredPickup = pickupPoints.filter(p => 
+    p.name && p.name.toLowerCase().includes(normalizedSearch)
+  );
+  const filteredFaculties = faculties.filter(f => 
+    f.name && f.name.toLowerCase().includes(normalizedSearch)
+  );
 
 
   return (
@@ -159,108 +174,151 @@ export default function App() {
         />
         <Marker coordinate={center} title="Edificio Principal" description="FCAeI" />
         
-        {/* --- Capa de Comida (foodSpots) --- */}
-        {showFood && foodSpots.map(s => (
+        {/* --- MODIFICADO: Capas usan los arrays filtrados --- */}
+        {showFood && filteredFood.map(s => (
           s.coord && <Marker 
             key={s.id} 
             coordinate={{ latitude: s.coord.latitude, longitude: s.coord.longitude }} 
             image={foodIcon} 
             title={s.name || ''} 
             description={s.desc || ''}
-            // MODIFICADO: onPress en lugar de onCalloutPress
-            onPress={() => openModal(s, 'food')}
-          >
-            {/* MODIFICADO: Se elimina el <Callout> */}
-          </Marker>
+            onPress={() => openDetailModal(s, 'food')}
+          />
         ))}
         
-        {/* --- Capa de Paradas (pickupPoints) --- */}
-        {showPickup && pickupPoints.map(p => (
+        {showPickup && filteredPickup.map(p => (
           p.coord && <Marker 
             key={p.id} 
             coordinate={{ latitude: p.coord.latitude, longitude: p.coord.longitude }} 
             image={busIcon} 
             title={p.name || ''} 
             description={p.lines || ''}
-            // MODIFICADO: onPress en lugar de onCalloutPress
-            onPress={() => openModal(p, 'pickup')}
-          >
-            {/* MODIFICADO: Se elimina el <Callout> */}
-          </Marker>
+            onPress={() => openDetailModal(p, 'pickup')}
+          />
         ))}
 
-        {/* --- Capa de Facultades (faculties) --- */}
-        {showFaculties && faculties.map(f => (
+        {showFaculties && filteredFaculties.map(f => (
           f.coord && <Marker 
             key={f.id} 
             coordinate={{ latitude: f.coord.latitude, longitude: f.coord.longitude }} 
             image={facultyIcon} 
             title={f.name || ''} 
             description={f.desc || ''}
-            // MODIFICADO: onPress en lugar de onCalloutPress
-            onPress={() => openModal(f, 'faculty')}
-          >
-            {/* MODIFICADO: Se elimina el <Callout> */}
-          </Marker>
+            onPress={() => openDetailModal(f, 'faculty')}
+          />
         ))}
 
       </MapView> 
 
-      {/* ... (Indicador de Carga, Controles y Botón de Usuario) ... */}
+      {/* --- Barra de Búsqueda --- */}
+      <TextInput
+        style={styles.searchBar}
+        placeholder="Buscar por nombre"
+        value={searchText}
+        onChangeText={setSearchText}
+        placeholderTextColor="#666"
+      />
+
+      {/* ... (Indicador de Carga y Botón de Usuario) ... */}
       {isLoading && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#0000ff" />
           <Text>Cargando puntos de interés...</Text>
         </View>
       )}
-      <View style={styles.filters}>
-        <Chip label={showFood ? 'Comida: ON' : 'Comida: OFF'} onPress={() => setShowFood(v => !v)} />
-        <Chip label={showPickup ? 'Paradas: ON' : 'Paradas: OFF'} onPress={() => setShowPickup(v => !v)} />
-        <Chip label={showFaculties ? 'Facultades: ON' : 'Facultades: OFF'} onPress={() => setShowFaculties(v => !v)} />
-      </View>
       <TouchableOpacity style={styles.userLocationButton} onPress={centerOnUser}>
         <Text style={{ fontWeight: 'bold' }}>🎯</Text>
       </TouchableOpacity>
 
-
-      {/* --- NUEVO: Modal de Detalles --- */}
+      {/* --- NUEVO: Botón de Filtros --- */}
+      <TouchableOpacity 
+        style={styles.filterButton} 
+        onPress={() => setFilterModalVisible(true)}
+      >
+        <Text style={styles.filterButtonText}>Filtros ▾</Text>
+      </TouchableOpacity>
+      
+      {/* --- Modal de Detalles --- */}
       <Modal
         transparent={true}
         animationType="slide"
-        visible={modalVisible}
-        onRequestClose={closeModal}
+        visible={detailModalVisible} // Modificado
+        onRequestClose={closeDetailModal} // Modificado
       >
-        {/* Pressable para el fondo oscuro que cierra el modal */}
-        <Pressable style={styles.modalBackground} onPress={closeModal}>
-          {/* Pressable para el contenido, para evitar que el clic se propague al fondo */}
+        <Pressable style={styles.modalBackground} onPress={closeDetailModal}>
           <Pressable style={styles.modalContent} onPress={() => {}}>
             {selectedSpot && (
               <>
                 <Text style={styles.modalTitle}>{selectedSpot.name}</Text>
-                
-                {/* Lógica para mostrar 'desc' o 'lines' */}
                 {selectedType === 'pickup' ? (
                   <Text style={styles.modalDesc}>Líneas: {selectedSpot.lines || 'No especificadas'}</Text>
                 ) : (
                   <Text style={styles.modalDesc}>{selectedSpot.desc || 'No hay descripción disponible.'}</Text>
                 )}
 
-                <TouchableOpacity 
-                  style={styles.modalButton} 
-                  onPress={() => {
-                    openExternalNav(selectedSpot.coord.latitude, selectedSpot.coord.longitude, selectedSpot.name);
-                    closeModal(); // Opcional: cerrar el modal después de presionar
-                  }}
-                >
-                  <Text style={styles.modalButtonText}>Ir con Maps</Text>
-                </TouchableOpacity>
+                <View style={styles.modalButtonContainer}>
+                  <TouchableOpacity 
+                    style={[styles.modalButtonSmall, {backgroundColor: '#007AFF'}]} 
+                    onPress={() => {
+                      openExternalNav(selectedSpot.coord.latitude, selectedSpot.coord.longitude, selectedSpot.name, 'w'); 
+                      closeDetailModal();
+                    }}
+                  >
+                    <Text style={styles.modalButtonText}>Ir Caminando 🚶</Text>
+                  </TouchableOpacity>
 
-                {/* Botón para cerrar (alternativo) */}
-                <TouchableOpacity style={styles.closeButton} onPress={closeModal}>
+                  <TouchableOpacity 
+                    style={[styles.modalButtonSmall, {backgroundColor: '#4CD964'}]} 
+                    onPress={() => {
+                      openExternalNav(selectedSpot.coord.latitude, selectedSpot.coord.longitude, selectedSpot.name, 'd'); 
+                      closeDetailModal();
+                    }}
+                  >
+                    <Text style={styles.modalButtonText}>Ir en Carro 🚗</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity style={styles.closeButton} onPress={closeDetailModal}>
                   <Text style={styles.closeButtonText}>Cerrar</Text>
                 </TouchableOpacity>
               </>
             )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* --- NUEVO: Modal de Filtros --- */}
+      <Modal
+        transparent={true}
+        animationType="slide"
+        visible={filterModalVisible}
+        onRequestClose={() => setFilterModalVisible(false)}
+      >
+        <Pressable style={styles.modalBackground} onPress={() => setFilterModalVisible(false)}>
+          <Pressable style={styles.modalContent} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Mostrar en el mapa</Text>
+            
+            <View style={styles.filterChipContainer}>
+              <Chip 
+                label={showFood ? '✅ Comida' : '⬜️ Comida'} 
+                onPress={() => setShowFood(v => !v)} 
+                isActive={showFood}
+              />
+              <Chip 
+                label={showPickup ? '✅ Paradas' : '⬜️ Paradas'} 
+                onPress={() => setShowPickup(v => !v)} 
+                isActive={showPickup}
+              />
+              <Chip 
+                label={showFaculties ? '✅ Facultades' : '⬜️ Facultades'} 
+                onPress={() => setShowFaculties(v => !v)} 
+                isActive={showFaculties}
+              />
+            </View>
+
+            <TouchableOpacity style={styles.closeButton} onPress={() => setFilterModalVisible(false)}>
+              <Text style={styles.closeButtonText}>Cerrar</Text>
+            </TouchableOpacity>
           </Pressable>
         </Pressable>
       </Modal>
@@ -269,39 +327,97 @@ export default function App() {
   );
 }
 
-// ... (El componente Chip no cambia) ...
-const Chip = ({ label, onPress }) => (
-  <TouchableOpacity onPress={onPress} style={styles.chip}>
-    <Text style={{ fontWeight: '600' }}>{label}</Text>
+// --- MODIFICADO: El Chip ahora acepta 'isActive' ---
+const Chip = ({ label, onPress, isActive }) => (
+  <TouchableOpacity 
+    onPress={onPress} 
+    style={[
+      styles.chip, 
+      isActive ? styles.chipActive : styles.chipInactive 
+    ]}
+  >
+    <Text style={isActive ? styles.chipActiveText : styles.chipInactiveText}>
+      {label}
+    </Text>
   </TouchableOpacity>
 );
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   map: { width: '100%', height: '100%' },
-  filters: {
-    position: 'absolute', 
-    bottom: 20, 
-    alignSelf: 'center', 
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    flexDirection: 'row', 
-    gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.9)', 
-    borderRadius: 20, 
-    padding: 8,
-    marginHorizontal: 20, 
+  
+  searchBar: {
+    position: 'absolute',
+    top: 60, 
+    left: 20,
+    right: 20,
+    backgroundColor: 'white',
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    borderRadius: 30,
+    borderColor: '#ddd',
+    borderWidth: 1,
+    fontSize: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+
+  // --- MODIFICADO: Estilos de Filtros ---
+  filterButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    backgroundColor: 'white',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 30,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  filterButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // Contenedor para los chips DENTRO del modal de filtros
+  filterChipContainer: {
+    marginVertical: 20,
+    gap: 10,
   },
   chip: { 
-    paddingHorizontal: 12, 
-    paddingVertical: 8, 
-    borderRadius: 999, 
-    backgroundColor: '#eee', 
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10, 
     margin: 2, 
+    borderWidth: 1,
   },
+  chipActive: {
+    backgroundColor: '#E0EFFF',
+    borderColor: '#007AFF',
+  },
+  chipInactive: {
+    backgroundColor: '#F0F0F0',
+    borderColor: '#CCC',
+  },
+  chipActiveText: {
+    fontWeight: 'bold',
+    color: '#007AFF',
+    fontSize: 16,
+  },
+  chipInactiveText: {
+    fontWeight: '500',
+    color: '#555',
+    fontSize: 16,
+  },
+  
   userLocationButton: {
     position: 'absolute',
-    top: 60,
+    top: 130, 
     right: 20,
     backgroundColor: 'white',
     padding: 12,
@@ -324,15 +440,16 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
 
-  // --- NUEVO: Estilos del Modal ---
+  // --- Estilos del Modal ---
   modalBackground: {
     flex: 1,
-    justifyContent: 'flex-end', // Alinea el contenido al fondo
-    backgroundColor: 'rgba(0, 0, 0, 0.5)', // Fondo oscuro semitransparente
+    justifyContent: 'flex-end', 
+    backgroundColor: 'rgba(0, 0, 0, 0.5)', 
   },
   modalContent: {
     backgroundColor: 'white',
     padding: 22,
+    paddingBottom: 30,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     shadowColor: '#000',
@@ -351,15 +468,20 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 20,
   },
-  modalButton: {
-    backgroundColor: '#007AFF', // Azul de Apple
+  modalButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  modalButtonSmall: {
+    flex: 1,
     padding: 15,
     borderRadius: 10,
     alignItems: 'center',
   },
   modalButtonText: {
     color: 'white',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 'bold',
   },
   closeButton: {
